@@ -8,19 +8,28 @@ load_dotenv(dotenv_path=env_path)
 
 
 class Settings:
-    PROJECT_NAME: str = "MASTER AI Backend"
-    VERSION: str = "2.0.0"
+    PROJECT_NAME: str = os.getenv("PROJECT_NAME", "MASTER AI Backend")
+    VERSION: str = os.getenv("VERSION", "2.0.0")
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
     API_PREFIX: str = "/api"
+
+    # Server Binding
+    HOST: str = os.getenv("HOST", "0.0.0.0")
+    PORT: int = int(os.getenv("PORT", "8000"))
 
     # CORS
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:5173")
-    ALLOWED_ORIGINS: list[str] = [
-        FRONTEND_URL,
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ]
+    CORS_ORIGINS_RAW: str = os.getenv("CORS_ORIGINS", "")
+    ALLOWED_ORIGINS: list[str] = list(
+        {
+            FRONTEND_URL,
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            *[orig.strip() for orig in CORS_ORIGINS_RAW.split(",") if orig.strip()],
+        }
+    )
 
     # Whisper STT Settings
     WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "small")
@@ -42,7 +51,9 @@ class Settings:
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./data/master_ai.db")
 
     # Stage 5: RAG & Vector Store Settings
-    CHROMA_PERSIST_DIR: Path = Path(__file__).resolve().parent.parent / "data" / "chroma"
+    CHROMA_PERSIST_DIR: Path = Path(
+        os.getenv("CHROMA_PERSIST_DIR", str(Path(__file__).resolve().parent.parent / "data" / "chroma"))
+    )
     CHROMA_COLLECTION: str = os.getenv("CHROMA_COLLECTION", "master_ai_knowledge")
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
     RAG_CHUNK_SIZE: int = int(os.getenv("RAG_CHUNK_SIZE", "700"))

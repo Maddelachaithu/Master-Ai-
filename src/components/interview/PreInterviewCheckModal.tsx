@@ -18,6 +18,7 @@ import { Button } from '../common/Button';
 import { Badge } from '../common/Badge';
 import { Card } from '../common/Card';
 import { ragApi } from '../../services/ragApi';
+import { getApiBaseUrl } from '../../services/apiClient';
 
 interface CheckItem {
   id: string;
@@ -152,7 +153,7 @@ export const PreInterviewCheckModal: React.FC<PreInterviewCheckModalProps> = ({
     let dbStatus: 'ready' | 'warning' | 'error' = 'ready';
     let dbMsg = 'Database connected (Turn persistence active).';
     try {
-      const res = await fetch('http://localhost:8000/api/health').then((r) => r.json()).catch(() => null);
+      const res = await fetch(`${getApiBaseUrl()}/api/health`).then((r) => r.json()).catch(() => null);
       if (res && res.status === 'healthy') {
         whisperStatus = res.whisper_ready ? 'ready' : 'ready';
         whisperMsg = res.whisper_ready ? 'Whisper STT online (faster-whisper int8 ready).' : 'Whisper STT initialized.';

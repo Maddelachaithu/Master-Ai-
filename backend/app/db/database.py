@@ -7,6 +7,8 @@ from app.config import settings
 logger = logging.getLogger("master_ai.db")
 
 db_url = settings.DATABASE_URL
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
 
 # Normalize sqlite path for Windows if using relative sqlite URL
 if db_url.startswith("sqlite"):

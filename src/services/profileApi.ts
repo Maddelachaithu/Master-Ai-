@@ -1,4 +1,4 @@
-import { apiClient } from './apiClient';
+import { apiClient, getApiBaseUrl } from './apiClient';
 import { CandidateProfile, SkillGapAnalysis, JobMatchAnalysis, ParsedResumeData } from '../types';
 
 export const profileApi = {
@@ -25,7 +25,7 @@ export const profileApi = {
     const formData = new FormData();
     formData.append('file', file);
 
-    const res = await fetch('http://localhost:8000/api/profile/resume', {
+    const res = await fetch(`${getApiBaseUrl()}/api/profile/resume`, {
       method: 'POST',
       body: formData,
     });

@@ -19,6 +19,7 @@ import { AuthModal } from './pages/AuthModal';
 import { GlobalErrorBoundary } from './components/common/GlobalErrorBoundary';
 import { OfflineBanner } from './components/common/OfflineBanner';
 import { InterviewMode, PracticeConfig, QuestionBankItem } from './types';
+import { getApiBaseUrl } from './services/apiClient';
 
 const MainAppContent: React.FC = () => {
   const { startSession, updateConfig, backendHealth } = useSession();
@@ -70,7 +71,7 @@ const MainAppContent: React.FC = () => {
 
   const handleRetryBackendConnection = useCallback(async () => {
     try {
-      const res = await fetch('http://localhost:8000/health');
+      const res = await fetch(`${getApiBaseUrl()}/health`);
       if (res.ok) {
         setOfflineDismissed(false);
       }
