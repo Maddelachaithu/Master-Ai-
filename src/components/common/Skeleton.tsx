@@ -1,0 +1,16 @@
+import React from 'react';
+import { cn } from '../../lib/utils';
+
+export interface SkeletonProps extends React.HTMLAttributes<HTMLDivElement> {}
+
+export const Skeleton: React.FC<SkeletonProps> = ({ className, ...props }) => {
+  return (
+    <div
+      className={cn(
+        'animate-pulse rounded-xl bg-slate-800/60 border border-white/[0.04]',
+        className
+      )}
+      {...props}
+    />
+  );
+};
