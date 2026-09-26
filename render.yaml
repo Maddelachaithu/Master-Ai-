@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: master-ai-backend
+    runtime: python
+    rootDir: backend
+    plan: standard
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /api/health
+    disk:
+      name: master-ai-data
+      mountPath: /data
+      sizeGB: 5
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: CHROMA_PERSIST_DIR
+        value: /data/chroma
+      - key: WHISPER_MODEL
+        value: small
+      - key: WHISPER_DEVICE
+        value: cpu
+      - key: WHISPER_COMPUTE_TYPE
+        value: int8
+      - key: CHROMA_COLLECTION
+        value: master_ai_knowledge
+      - key: EMBEDDING_MODEL
+        value: sentence-transformers/all-MiniLM-L6-v2
+      - key: DATABASE_URL
+        fromDatabase:
+          name: master-ai-postgres
+          property: connectionString
+
+databases:
+  - name: master-ai-postgres
+    plan: free
+    databaseName: master_ai
+    user: master_ai_user
