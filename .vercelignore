@@ -1,0 +1,8 @@
+# Prevent Vercel from bundling heavy PyTorch / Whisper ML dependencies as a serverless function
+backend/
+server/
+docs/
+scripts/
+.pytest_cache/
+temp_audio/
+data/
