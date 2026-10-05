@@ -141,6 +141,10 @@ export const interviewApi = {
       frame_quality: number;
       lighting_quality?: number;
       dominant_posture_state?: string;
+      background_person_events?: number;
+      background_movement_events?: number;
+      total_detected_duration_seconds?: number;
+      posture_warnings?: number;
       observations?: string[];
     }
   ): Promise<{ status: string; session_id: string; question_id: string; summary_recorded: boolean }> {

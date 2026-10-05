@@ -180,7 +180,11 @@ export const PerformanceReportPage: React.FC<PerformanceReportPageProps> = ({
 
         {/* Right: Multimodal Signal Cards (5 cols) */}
         <div className="lg:col-span-5 space-y-6">
-          <VisualMetricsCard metrics={report.visionMetrics} telemetry={report.visionTelemetry} />
+          <VisualMetricsCard
+            metrics={report.visionMetrics}
+            telemetry={report.visionTelemetry}
+            environmentSummary={report.environmentMonitoring}
+          />
           <VoiceMetricsCard metrics={report.voiceMetrics} />
         </div>
       </div>

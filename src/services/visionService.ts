@@ -1,17 +1,19 @@
 /**
  * MASTER AI - Real-Time Multimodal Computer Vision & Presentation Analysis Service
- * Stage 3 Implementation
+ * Stage 3 & Environment Monitoring Implementation
  * 
  * Responsibilities:
  * - Real camera media lifecycle (getUserMedia / video tracks)
  * - Observable presentation signals tracking (Face engagement, head orientation, posture consistency, frame quality, lighting)
- * - MediaPipe Face Landmarker & Pose Landmarker integration with robust Canvas fallback
+ * - Real-time Background Person Detection & Warning System (immediate client-side low latency detection)
+ * - Background Movement Detection with temporal differencing
+ * - MediaPipe Face Landmarker & Pose Landmarker multi-person tracking with robust Canvas fallback
  * - 1Hz bounded time-series telemetry buffer (max 1200 records)
- * - Per-answer presentation summary computation for multimodal reporting
+ * - Objective Environment Monitoring telemetry summaries
  * 
  * PRIVACY & ETHICS GUARANTEE:
  * - Zero raw video frames stored or transmitted over network.
- * - Observable technical presentation signals ONLY.
+ * - Observable technical presentation and environment signals ONLY.
  * - Strictly NO emotion recognition, personality inference, mental health inference, or lie detection.
  */
 
@@ -24,7 +26,17 @@ import {
   LightingState,
   FrameQualityState,
   HeadOrientation,
+  EnvironmentStatus,
+  EnvironmentEventRecord,
+  EnvironmentMonitoringSummary,
 } from '../types';
+
+export const BACKGROUND_PERSON_CONFIRMATION_FRAMES = 3;
+export const BACKGROUND_PERSON_LOST_FRAMES = 10;
+export const BACKGROUND_PERSON_WARNING_COOLDOWN_MS = 5000;
+export const BACKGROUND_MOVEMENT_CONFIRMATION_FRAMES = 3;
+export const BACKGROUND_MOVEMENT_LOST_FRAMES = 8;
+export const POSTURE_WARNING_COOLDOWN_MS = 8000;
 
 export class VisionService {
   private mediaStream: MediaStream | null = null;
@@ -42,6 +54,25 @@ export class VisionService {
 
   private consecutiveMissingFrames = 0;
   private readonly MISSING_FRAME_GRACE_THRESHOLD = 20; // ~2.5s grace period before declaring face missing
+
+  // Background Person & Movement Tracking state
+  private consecutiveBackgroundPersonFrames = 0;
+  private consecutivePersonLostFrames = 0;
+  private backgroundPersonConfirmed = false;
+  private lastBackgroundPersonWarningTime = 0;
+  private backgroundPersonDurationSeconds = 0;
+  private backgroundPersonEventsCount = 0;
+
+  private consecutiveMovementFrames = 0;
+  private consecutiveMovementLostFrames = 0;
+  private backgroundMovementDetected = false;
+  private backgroundMovementEventsCount = 0;
+
+  private postureWarningsCount = 0;
+  private lastPostureWarningTime = 0;
+
+  private prevBackgroundBuffer: Uint8ClampedArray | null = null;
+  private environmentEvents: EnvironmentEventRecord[] = [];
 
   // Telemetry buffer: sampled every 1s, bounded to max 1200 items (20 min session)
   private telemetryBuffer: VisionTelemetryRecord[] = [];
@@ -67,6 +98,17 @@ export class VisionService {
     lightingState: 'GOOD_LIGHTING',
     lightingFeedback: 'Lighting is optimal.',
     timestamp: Date.now(),
+    additionalPersonDetected: false,
+    backgroundPersonConfirmed: false,
+    backgroundMovementDetected: false,
+    detectedPersonsCount: 1,
+    environmentStatus: 'CLEAR',
+    environmentStatusText: '🟢 Environment Clear',
+    activeWarningMessage: null,
+    backgroundPersonEventsCount: 0,
+    backgroundMovementEventsCount: 0,
+    backgroundPersonDurationSeconds: 0,
+    postureWarningsCount: 0,
     // Backward-compat aliases
     eyeContactConsistency: 88,
     facePresent: true,
@@ -110,7 +152,7 @@ export class VisionService {
           delegate: 'GPU',
         },
         runningMode: 'VIDEO',
-        numFaces: 1,
+        numFaces: 4, // Multi-face detection enabled for candidate + background persons
       });
 
       this.poseLandmarker = await PoseLandmarker.createFromOptions(filesetResolver, {
@@ -120,7 +162,7 @@ export class VisionService {
           delegate: 'GPU',
         },
         runningMode: 'VIDEO',
-        numPoses: 1,
+        numPoses: 4, // Multi-pose detection enabled
       });
 
       this.isMediaPipeReady = true;
@@ -221,6 +263,7 @@ export class VisionService {
     this.isTracking = true;
     this.sessionStartTime = Date.now();
     this.telemetryBuffer = [];
+    this.resetEnvironmentMonitoring();
     this.updateStatus('ANALYZING');
 
     // 1. Vision Processing Loop (gated ~8 FPS for minimal CPU footprint)
@@ -260,7 +303,27 @@ export class VisionService {
   }
 
   /**
-   * Frame analysis execution
+   * Resets environment monitoring counters and historical events
+   */
+  public resetEnvironmentMonitoring(): void {
+    this.consecutiveBackgroundPersonFrames = 0;
+    this.consecutivePersonLostFrames = 0;
+    this.backgroundPersonConfirmed = false;
+    this.lastBackgroundPersonWarningTime = 0;
+    this.backgroundPersonDurationSeconds = 0;
+    this.backgroundPersonEventsCount = 0;
+    this.consecutiveMovementFrames = 0;
+    this.consecutiveMovementLostFrames = 0;
+    this.backgroundMovementDetected = false;
+    this.backgroundMovementEventsCount = 0;
+    this.postureWarningsCount = 0;
+    this.lastPostureWarningTime = 0;
+    this.environmentEvents = [];
+    this.prevBackgroundBuffer = null;
+  }
+
+  /**
+   * Frame analysis execution: MediaPipe multi-person detection + Canvas fallback
    */
   private analyzeCurrentFrame(): void {
     if (!this.videoElement || this.videoElement.readyState < 2) {
@@ -274,7 +337,7 @@ export class VisionService {
     if (!canvas || !ctx) return;
 
     try {
-      // 1. Try MediaPipe if ready
+      // 1. Try MediaPipe multi-person detection if ready
       if (this.isMediaPipeReady && this.faceLandmarker) {
         const timestamp = performance.now();
         const faceResults = this.faceLandmarker.detectForVideo(video, timestamp);
@@ -283,8 +346,43 @@ export class VisionService {
           poseResults = this.poseLandmarker.detectForVideo(video, timestamp);
         }
 
-        if (faceResults && faceResults.faceLandmarks && faceResults.faceLandmarks.length > 0) {
-          this.processMediaPipeResults(faceResults.faceLandmarks[0], poseResults?.landmarks?.[0]);
+        const faces = faceResults?.faceLandmarks || [];
+        const poses = poseResults?.landmarks || [];
+
+        if (faces.length > 0) {
+          // Identify primary candidate face (closest to center and largest size)
+          let primaryIndex = 0;
+          let bestScore = -999;
+
+          for (let i = 0; i < faces.length; i++) {
+            const f = faces[i];
+            const nose = f[1] || { x: 0.5, y: 0.5 };
+            const leftEye = f[33] || { x: 0.4, y: 0.4 };
+            const rightEye = f[263] || { x: 0.6, y: 0.4 };
+            const eyeDist = Math.hypot(rightEye.x - leftEye.x, rightEye.y - leftEye.y);
+            const centerDist = Math.hypot(nose.x - 0.5, nose.y - 0.45);
+            const score = eyeDist * 2.0 - centerDist * 1.5;
+            if (score > bestScore) {
+              bestScore = score;
+              primaryIndex = i;
+            }
+          }
+
+          const primaryFace = faces[primaryIndex];
+          const primaryPose = poses[0];
+
+          // Additional person detected if multiple valid faces or multiple distinct poses
+          const hasAdditionalFace = faces.length > 1;
+          const hasAdditionalPose = poses.length > 1;
+          const rawAdditionalPerson = hasAdditionalFace || hasAdditionalPose;
+          const totalPersons = Math.max(faces.length, poses.length);
+
+          // Optical background difference check for movement
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const rawMovement = this.checkBackgroundMovement(imgData, primaryFace[1]);
+
+          this.processMediaPipeResults(primaryFace, primaryPose, rawAdditionalPerson, rawMovement, totalPersons);
           return;
         }
       }
@@ -299,9 +397,189 @@ export class VisionService {
   }
 
   /**
-   * Processes MediaPipe landmarks into observable metrics
+   * Fast background movement detection via pixel luminance delta outside candidate area
    */
-  private processMediaPipeResults(faceLandmarks: any[], poseLandmarks?: any[]): void {
+  private checkBackgroundMovement(imgData: ImageData, primaryNose?: { x: number; y: number }): boolean {
+    const data = imgData.data;
+    const width = imgData.width;
+    const height = imgData.height;
+    const candidateCenterX = (primaryNose?.x || 0.5) * width;
+    const candidateCenterY = (primaryNose?.y || 0.45) * height;
+    const candidateRadiusSq = Math.pow(width * 0.28, 2);
+
+    let changedBackgroundPixels = 0;
+    let totalBackgroundSampled = 0;
+
+    if (!this.prevBackgroundBuffer || this.prevBackgroundBuffer.length !== data.length / 4) {
+      this.prevBackgroundBuffer = new Uint8ClampedArray(data.length / 4);
+      for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+        this.prevBackgroundBuffer[p] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+      }
+      return false;
+    }
+
+    // Sample pixels with stride 4
+    for (let i = 0, p = 0; i < data.length; i += 16, p += 4) {
+      const px = p % width;
+      const py = Math.floor(p / width);
+      const distSq = Math.pow(px - candidateCenterX, 2) + Math.pow(py - candidateCenterY, 2);
+
+      // Only check pixels OUTSIDE the candidate foreground radius
+      if (distSq > candidateRadiusSq) {
+        totalBackgroundSampled++;
+        const lum = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+        const prevLum = this.prevBackgroundBuffer[p];
+        if (Math.abs(lum - prevLum) > 28) {
+          changedBackgroundPixels++;
+        }
+        this.prevBackgroundBuffer[p] = lum;
+      }
+    }
+
+    const motionRatio = totalBackgroundSampled > 0 ? changedBackgroundPixels / totalBackgroundSampled : 0;
+    return motionRatio > 0.07; // >7% of background experiencing significant optical motion
+  }
+
+  /**
+   * Evaluates environment state, temporal smoothing, cooldowns, and generates immediate warning messages
+   */
+  public evaluateEnvironmentState(
+    rawAdditionalPerson: boolean,
+    rawBackgroundMovement: boolean,
+    postureState: PostureState,
+    currentTime: number = Date.now(),
+    deltaSeconds: number = this.analysisIntervalMs / 1000
+  ): {
+    backgroundPersonConfirmed: boolean;
+    backgroundMovementDetected: boolean;
+    environmentStatus: EnvironmentStatus;
+    environmentStatusText: string;
+    activeWarningMessage: string | null;
+  } {
+    // 1. Multi-Frame Temporal Confirmation for Background Person
+    if (rawAdditionalPerson) {
+      this.consecutiveBackgroundPersonFrames++;
+      this.consecutivePersonLostFrames = 0;
+
+      if (this.consecutiveBackgroundPersonFrames >= BACKGROUND_PERSON_CONFIRMATION_FRAMES) {
+        if (!this.backgroundPersonConfirmed) {
+          this.backgroundPersonConfirmed = true;
+          // Apply cooldown check to avoid duplicate event spamming
+          if (currentTime - this.lastBackgroundPersonWarningTime > BACKGROUND_PERSON_WARNING_COOLDOWN_MS) {
+            this.backgroundPersonEventsCount++;
+            this.lastBackgroundPersonWarningTime = currentTime;
+            this.environmentEvents.push({
+              event: 'BACKGROUND_PERSON_DETECTED',
+              timestamp: new Date(currentTime).toISOString(),
+              duration_seconds: 0,
+              severity: 'warning',
+            });
+          }
+        }
+      }
+    } else {
+      this.consecutivePersonLostFrames++;
+      if (this.consecutivePersonLostFrames >= BACKGROUND_PERSON_LOST_FRAMES) {
+        this.backgroundPersonConfirmed = false;
+        this.consecutiveBackgroundPersonFrames = 0;
+      }
+    }
+
+    // Accumulate duration while person remains confirmed
+    if (this.backgroundPersonConfirmed) {
+      this.backgroundPersonDurationSeconds += deltaSeconds;
+    }
+
+    // 2. Background Movement Confirmation
+    if (rawBackgroundMovement && !this.backgroundPersonConfirmed) {
+      this.consecutiveMovementFrames++;
+      this.consecutiveMovementLostFrames = 0;
+
+      if (this.consecutiveMovementFrames >= BACKGROUND_MOVEMENT_CONFIRMATION_FRAMES) {
+        if (!this.backgroundMovementDetected) {
+          this.backgroundMovementDetected = true;
+          this.backgroundMovementEventsCount++;
+          this.environmentEvents.push({
+            event: 'BACKGROUND_MOVEMENT_DETECTED',
+            timestamp: new Date(currentTime).toISOString(),
+            duration_seconds: 0,
+            severity: 'warning',
+          });
+        }
+      }
+    } else {
+      this.consecutiveMovementLostFrames++;
+      if (this.consecutiveMovementLostFrames >= BACKGROUND_MOVEMENT_LOST_FRAMES) {
+        this.backgroundMovementDetected = false;
+        this.consecutiveMovementFrames = 0;
+      }
+    }
+
+    // 3. Posture Warning Tracking
+    const isPosturePoor = postureState !== 'GOOD_ALIGNMENT' && postureState !== 'UNKNOWN';
+    if (isPosturePoor) {
+      if (currentTime - this.lastPostureWarningTime > POSTURE_WARNING_COOLDOWN_MS) {
+        this.postureWarningsCount++;
+        this.lastPostureWarningTime = currentTime;
+        this.environmentEvents.push({
+          event: 'POSTURE_WARNING',
+          timestamp: new Date(currentTime).toISOString(),
+          duration_seconds: 0,
+          severity: 'info',
+        });
+      }
+    }
+
+    // 4. Exact Warning Message Generation
+    let activeWarningMessage: string | null = null;
+    if (this.backgroundPersonConfirmed && isPosturePoor) {
+      activeWarningMessage =
+        "⚠️ Another person detected behind you. Please do not use another person's help. Complete the interview independently. Also, please sit straight and maintain a professional posture.";
+    } else if (this.backgroundPersonConfirmed) {
+      activeWarningMessage =
+        "⚠️ Another person detected behind you. Please do not use another person's help. Complete the interview independently.";
+    } else if (isPosturePoor) {
+      activeWarningMessage =
+        "📐 Please sit straight and maintain a professional posture.";
+    } else if (this.backgroundMovementDetected) {
+      activeWarningMessage =
+        "⚠️ Background movement detected. Please do not use another person's help.";
+    }
+
+    // 5. Environment Monitoring Status Pill State
+    let environmentStatus: EnvironmentStatus = 'CLEAR';
+    let environmentStatusText = '🟢 Environment Clear';
+
+    if (this.backgroundPersonConfirmed) {
+      environmentStatus = 'BACKGROUND_PERSON_DETECTED';
+      environmentStatusText = '🔴 Background Person Detected';
+    } else if (this.backgroundMovementDetected) {
+      environmentStatus = 'BACKGROUND_MOVEMENT_DETECTED';
+      environmentStatusText = '⚠️ Background Movement Detected';
+    } else if (isPosturePoor) {
+      environmentStatus = 'POSTURE_WARNING';
+      environmentStatusText = '📐 Please Sit Straight';
+    }
+
+    return {
+      backgroundPersonConfirmed: this.backgroundPersonConfirmed,
+      backgroundMovementDetected: this.backgroundMovementDetected,
+      environmentStatus,
+      environmentStatusText,
+      activeWarningMessage,
+    };
+  }
+
+  /**
+   * Processes MediaPipe landmarks into observable presentation & environment metrics
+   */
+  private processMediaPipeResults(
+    faceLandmarks: any[],
+    poseLandmarks?: any[],
+    rawAdditionalPerson = false,
+    rawBackgroundMovement = false,
+    detectedPersonsCount = 1
+  ): void {
     this.consecutiveMissingFrames = 0;
 
     // Landmark references: 1 = Nose tip, 33 = Left eye outer, 263 = Right eye outer, 152 = Chin, 10 = Forehead
@@ -337,11 +615,10 @@ export class VisionService {
     else if (Math.abs(headRoll) > 15) headOrientation = 'Tilted';
 
     // 5. Camera Engagement Calculation (0 - 100)
-    // High when face is centered and head yaw/pitch are near zero
     const centerDevX = Math.abs(nose.x - 0.5);
     const centerDevY = Math.abs(nose.y - 0.45);
-    const centeringPenalty = (centerDevX * 50 + centerDevY * 40);
-    const anglePenalty = (Math.abs(headYaw) * 0.7 + Math.abs(headPitch) * 0.5);
+    const centeringPenalty = centerDevX * 50 + centerDevY * 40;
+    const anglePenalty = Math.abs(headYaw) * 0.7 + Math.abs(headPitch) * 0.5;
     const cameraEngagement = Math.round(Math.max(15, Math.min(98, 100 - centeringPenalty - anglePenalty)));
 
     // 6. Posture Analysis
@@ -383,6 +660,9 @@ export class VisionService {
     const lightingState: LightingState = 'GOOD_LIGHTING';
     const lightingFeedback = 'Lighting looks good.';
 
+    // 9. Environment State & Real-Time Warning Evaluation
+    const envState = this.evaluateEnvironmentState(rawAdditionalPerson, rawBackgroundMovement, postureState);
+
     this.publishMetrics({
       faceDetected: true,
       faceConfidence: 95,
@@ -401,6 +681,18 @@ export class VisionService {
       lightingState,
       lightingFeedback,
       timestamp: Date.now(),
+      additionalPersonDetected: rawAdditionalPerson,
+      backgroundPersonConfirmed: envState.backgroundPersonConfirmed,
+      backgroundMovementDetected: envState.backgroundMovementDetected,
+      detectedPersonsCount: Math.max(1, detectedPersonsCount),
+      environmentStatus: envState.environmentStatus,
+      environmentStatusText: envState.environmentStatusText,
+      activeWarningMessage: envState.activeWarningMessage,
+      backgroundPersonEventsCount: this.backgroundPersonEventsCount,
+      backgroundMovementEventsCount: this.backgroundMovementEventsCount,
+      backgroundPersonDurationSeconds: Math.round(this.backgroundPersonDurationSeconds),
+      postureWarningsCount: this.postureWarningsCount,
+      // Backward-compatibility
       eyeContactConsistency: cameraEngagement,
       facePresent: true,
       postureObservation: postureState === 'GOOD_ALIGNMENT' ? 'Centered & Upright' : postureState,
@@ -411,7 +703,7 @@ export class VisionService {
   }
 
   /**
-   * Resilient Canvas Image Analysis (Luminance, Skin Tone / Centroid, Head Orientation heuristic)
+   * Resilient Canvas Image Analysis (Multi-cluster skin detection & optical differencing fallback)
    */
   private processCanvasImageData(imgData: ImageData): void {
     const data = imgData.data;
@@ -419,10 +711,17 @@ export class VisionService {
     const height = imgData.height;
     const totalPixels = width * height;
 
-    let skinPixelCount = 0;
+    let candidateSkinPixels = 0;
+    let backgroundSkinPixels = 0;
     let sumX = 0;
     let sumY = 0;
     let totalLuminance = 0;
+
+    // Center candidate bounding box
+    const centerMinX = width * 0.2;
+    const centerMaxX = width * 0.8;
+    const centerMinY = height * 0.1;
+    const centerMaxY = height * 0.85;
 
     // Scan pixels (sampled with stride 4 for high performance)
     for (let i = 0; i < data.length; i += 16) {
@@ -433,26 +732,41 @@ export class VisionService {
       const lum = 0.299 * r + 0.587 * g + 0.114 * b;
       totalLuminance += lum;
 
-      // Color-space heuristic for face presence detection
-      if (r > 60 && g > 40 && b > 20 && r > g && r > b && Math.abs(r - g) > 10) {
-        skinPixelCount++;
+      // Color-space heuristic for skin detection
+      const isSkin = r > 60 && g > 40 && b > 20 && r > g && r > b && Math.abs(r - g) > 10;
+      if (isSkin) {
         const pixelIdx = i / 4;
-        sumX += pixelIdx % width;
-        sumY += Math.floor(pixelIdx / width);
+        const px = pixelIdx % width;
+        const py = Math.floor(pixelIdx / width);
+
+        if (px >= centerMinX && px <= centerMaxX && py >= centerMinY && py <= centerMaxY) {
+          candidateSkinPixels++;
+          sumX += px;
+          sumY += py;
+        } else {
+          // Detected skin cluster in background quadrant
+          backgroundSkinPixels++;
+        }
       }
     }
 
     const sampledPixels = totalPixels / 4;
     const avgLuminance = totalLuminance / sampledPixels;
-    const skinRatio = skinPixelCount / sampledPixels;
+    const candidateSkinRatio = candidateSkinPixels / sampledPixels;
+    const isFacePresent = candidateSkinRatio > 0.035;
 
-    // Face detection condition
-    const isFacePresent = skinRatio > 0.04;
+    // Background person present if significant skin cluster found outside candidate center
+    const rawAdditionalPerson = backgroundSkinPixels > 180;
+    const detectedPersonsCount = rawAdditionalPerson ? 2 : 1;
+
+    // Movement in background
+    const rawMovement = this.checkBackgroundMovement(imgData, { x: 0.5, y: 0.45 });
 
     if (!isFacePresent) {
       this.consecutiveMissingFrames++;
       if (this.consecutiveMissingFrames >= this.MISSING_FRAME_GRACE_THRESHOLD) {
         this.updateStatus('FACE_NOT_DETECTED');
+        const envState = this.evaluateEnvironmentState(rawAdditionalPerson, rawMovement, 'UNKNOWN');
         this.publishMetrics({
           ...this.currentMetrics,
           faceDetected: false,
@@ -464,6 +778,13 @@ export class VisionService {
           frameQualityState: 'Poor',
           frameFeedback: 'Position yourself in front of the camera.',
           timestamp: Date.now(),
+          additionalPersonDetected: rawAdditionalPerson,
+          backgroundPersonConfirmed: envState.backgroundPersonConfirmed,
+          backgroundMovementDetected: envState.backgroundMovementDetected,
+          detectedPersonsCount,
+          environmentStatus: envState.environmentStatus,
+          environmentStatusText: envState.environmentStatusText,
+          activeWarningMessage: envState.activeWarningMessage,
           eyeContactConsistency: 0,
           facePresent: false,
         });
@@ -474,9 +795,9 @@ export class VisionService {
       this.updateStatus('FACE_DETECTED');
     }
 
-    // Centroid of face region
-    const centerX = skinPixelCount > 0 ? sumX / skinPixelCount / width : 0.5;
-    const centerY = skinPixelCount > 0 ? sumY / skinPixelCount / height : 0.45;
+    // Centroid of candidate face region
+    const centerX = candidateSkinPixels > 0 ? sumX / candidateSkinPixels / width : 0.5;
+    const centerY = candidateSkinPixels > 0 ? sumY / candidateSkinPixels / height : 0.45;
 
     // Orientation & Angles from Centroid offsets
     const headYaw = Math.round((centerX - 0.5) * 60);
@@ -507,7 +828,7 @@ export class VisionService {
 
     const postureFeedback =
       postureState === 'GOOD_ALIGNMENT'
-        ? 'Your posture is consistent.'
+        ? 'Your posture is consistent and upright.'
         : 'Try maintaining an upright, centered posture.';
 
     // Lighting Quality
@@ -532,6 +853,9 @@ export class VisionService {
     const frameFeedback =
       frameQuality > 75 ? 'Camera framing looks good.' : 'Center your face in the camera frame.';
 
+    // Environment State & Warning
+    const envState = this.evaluateEnvironmentState(rawAdditionalPerson, rawMovement, postureState);
+
     this.publishMetrics({
       faceDetected: isFacePresent,
       faceConfidence: isFacePresent ? 88 : 10,
@@ -550,6 +874,17 @@ export class VisionService {
       lightingState,
       lightingFeedback,
       timestamp: Date.now(),
+      additionalPersonDetected: rawAdditionalPerson,
+      backgroundPersonConfirmed: envState.backgroundPersonConfirmed,
+      backgroundMovementDetected: envState.backgroundMovementDetected,
+      detectedPersonsCount,
+      environmentStatus: envState.environmentStatus,
+      environmentStatusText: envState.environmentStatusText,
+      activeWarningMessage: envState.activeWarningMessage,
+      backgroundPersonEventsCount: this.backgroundPersonEventsCount,
+      backgroundMovementEventsCount: this.backgroundMovementEventsCount,
+      backgroundPersonDurationSeconds: Math.round(this.backgroundPersonDurationSeconds),
+      postureWarningsCount: this.postureWarningsCount,
       eyeContactConsistency: cameraEngagement,
       facePresent: isFacePresent,
       postureObservation: postureState === 'GOOD_ALIGNMENT' ? 'Centered & Upright' : postureState,
@@ -594,6 +929,9 @@ export class VisionService {
       lightingQuality: this.currentMetrics.lightingQualityScore,
       headYaw: this.currentMetrics.headYaw,
       headPitch: this.currentMetrics.headPitch,
+      additionalPersonDetected: this.currentMetrics.backgroundPersonConfirmed,
+      backgroundMovementDetected: this.currentMetrics.backgroundMovementDetected,
+      environmentStatus: this.currentMetrics.environmentStatus,
     };
 
     this.telemetryBuffer.push(snapshot);
@@ -616,6 +954,19 @@ export class VisionService {
    */
   public getTelemetryHistory(): VisionTelemetryRecord[] {
     return [...this.telemetryBuffer];
+  }
+
+  /**
+   * Returns environment monitoring summary for reports & analytics
+   */
+  public getEnvironmentSummary(): EnvironmentMonitoringSummary {
+    return {
+      backgroundPersonEvents: this.backgroundPersonEventsCount,
+      backgroundMovementEvents: this.backgroundMovementEventsCount,
+      totalDetectedDurationSeconds: Math.round(this.backgroundPersonDurationSeconds),
+      postureWarnings: this.postureWarningsCount,
+      environmentEvents: [...this.environmentEvents],
+    };
   }
 
   /**
@@ -663,6 +1014,10 @@ export class VisionService {
       observations.push('Observable lateral shoulder tilt noted during response.');
     }
 
+    if (this.backgroundPersonEventsCount > 0) {
+      observations.push(`Environment note: ${this.backgroundPersonEventsCount} background person presence episode(s) observed.`);
+    }
+
     return {
       questionId,
       averageCameraEngagement: avgEngagement,
@@ -686,6 +1041,9 @@ export class VisionService {
       lightingQuality: this.currentMetrics.lightingQualityScore,
       headYaw: this.currentMetrics.headYaw,
       headPitch: this.currentMetrics.headPitch,
+      additionalPersonDetected: this.currentMetrics.backgroundPersonConfirmed,
+      backgroundMovementDetected: this.currentMetrics.backgroundMovementDetected,
+      environmentStatus: this.currentMetrics.environmentStatus,
     };
   }
 
@@ -698,6 +1056,7 @@ export class VisionService {
     this.canvasElement = null;
     this.canvasCtx = null;
     this.videoElement = null;
+    this.prevBackgroundBuffer = null;
   }
 }
 

@@ -134,6 +134,17 @@ const initialVisionMetrics: VisionMetrics = {
   lightingState: 'GOOD_LIGHTING',
   lightingFeedback: 'Lighting looks good.',
   timestamp: Date.now(),
+  additionalPersonDetected: false,
+  backgroundPersonConfirmed: false,
+  backgroundMovementDetected: false,
+  detectedPersonsCount: 1,
+  environmentStatus: 'CLEAR',
+  environmentStatusText: '🟢 Environment Clear',
+  activeWarningMessage: null,
+  backgroundPersonEventsCount: 0,
+  backgroundMovementEventsCount: 0,
+  backgroundPersonDurationSeconds: 0,
+  postureWarningsCount: 0,
   eyeContactConsistency: 88,
   facePresent: true,
   postureObservation: 'Centered & Upright',
@@ -559,6 +570,8 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
       );
       setAnswerVisionSummaries((prev) => [...prev, visionSummary]);
 
+      const envSummary = visionService.getEnvironmentSummary();
+
       // Submit vision summary to backend asynchronously
       interviewApi
         .submitVisionSummary(sessionId, {
@@ -569,6 +582,10 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
           frame_quality: visionSummary.averageFrameQuality,
           lighting_quality: visionSummary.averageLightingQuality,
           dominant_posture_state: visionSummary.dominantPostureState,
+          background_person_events: envSummary.backgroundPersonEvents,
+          background_movement_events: envSummary.backgroundMovementEvents,
+          total_detected_duration_seconds: envSummary.totalDetectedDurationSeconds,
+          posture_warnings: envSummary.postureWarnings,
           observations: visionSummary.observations,
         })
         .catch((e) => console.warn('Could not sync vision summary to backend:', e.message));
@@ -727,6 +744,7 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setAiStatusMessage('Session completed. Rubric evaluation report ready.');
 
     const telemetry = visionService.getTelemetryHistory();
+    const envSummary = visionService.getEnvironmentSummary();
     setVisionTelemetry(telemetry);
 
     const report: PerformanceReport = {
@@ -740,6 +758,7 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
       voiceMetrics,
       visionTelemetry: telemetry.length > 0 ? telemetry : undefined,
       answerVisionSummaries: answerVisionSummaries.length > 0 ? answerVisionSummaries : undefined,
+      environmentMonitoring: envSummary,
     };
 
     setLastReport(report);

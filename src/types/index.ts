@@ -83,6 +83,27 @@ export type HeadOrientation =
   | 'Looking Down'
   | 'Tilted';
 
+export type EnvironmentStatus =
+  | 'CLEAR'
+  | 'BACKGROUND_PERSON_DETECTED'
+  | 'BACKGROUND_MOVEMENT_DETECTED'
+  | 'POSTURE_WARNING';
+
+export interface EnvironmentEventRecord {
+  event: 'BACKGROUND_PERSON_DETECTED' | 'BACKGROUND_MOVEMENT_DETECTED' | 'POSTURE_WARNING';
+  timestamp: string;
+  duration_seconds: number;
+  severity: 'info' | 'warning' | 'critical';
+}
+
+export interface EnvironmentMonitoringSummary {
+  backgroundPersonEvents: number;
+  backgroundMovementEvents: number;
+  totalDetectedDurationSeconds: number;
+  postureWarnings: number;
+  environmentEvents?: EnvironmentEventRecord[];
+}
+
 export interface VisionMetrics {
   faceDetected: boolean;
   faceConfidence: number; // 0 - 100
@@ -101,6 +122,19 @@ export interface VisionMetrics {
   lightingState: LightingState;
   lightingFeedback: string;
   timestamp: number;
+
+  // Real-Time Background Person & Environment Monitoring fields
+  additionalPersonDetected: boolean;
+  backgroundPersonConfirmed: boolean;
+  backgroundMovementDetected: boolean;
+  detectedPersonsCount: number;
+  environmentStatus: EnvironmentStatus;
+  environmentStatusText: string;
+  activeWarningMessage: string | null;
+  backgroundPersonEventsCount: number;
+  backgroundMovementEventsCount: number;
+  backgroundPersonDurationSeconds: number;
+  postureWarningsCount: number;
   
   // Backward-compatibility aliases for existing UI components
   eyeContactConsistency: number; // maps to cameraEngagement
@@ -121,6 +155,9 @@ export interface VisionTelemetryRecord {
   lightingQuality: number;
   headYaw: number;
   headPitch: number;
+  additionalPersonDetected?: boolean;
+  backgroundMovementDetected?: boolean;
+  environmentStatus?: EnvironmentStatus;
 }
 
 export interface AnswerVisionSummary {
@@ -195,6 +232,7 @@ export interface PerformanceReport {
   voiceMetrics: VoiceMetrics;
   visionTelemetry?: VisionTelemetryRecord[];
   answerVisionSummaries?: AnswerVisionSummary[];
+  environmentMonitoring?: EnvironmentMonitoringSummary;
   questionEvaluations: QuestionEvaluation[];
   keyStrengths: string[];
   areasToImprove: string[];

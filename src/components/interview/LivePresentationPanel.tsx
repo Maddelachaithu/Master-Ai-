@@ -91,6 +91,32 @@ export const LivePresentationPanel: React.FC<LivePresentationPanelProps> = ({
             </p>
           </div>
         </div>
+
+        {/* Metric 4: Real-Time Environment Monitoring */}
+        <div className="p-3 rounded-xl bg-slate-900/60 border border-white/[0.04] space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+              <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+              Environment Monitoring
+            </span>
+            <span
+              className={cn(
+                'text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border',
+                visionMetrics.environmentStatus === 'BACKGROUND_PERSON_DETECTED'
+                  ? 'bg-rose-950/80 border-rose-500/50 text-rose-300'
+                  : visionMetrics.environmentStatus === 'BACKGROUND_MOVEMENT_DETECTED'
+                  ? 'bg-amber-950/80 border-amber-500/50 text-amber-300'
+                  : 'bg-emerald-950/60 border-emerald-500/30 text-emerald-300'
+              )}
+            >
+              {visionMetrics.environmentStatusText || '🟢 Environment Clear'}
+            </span>
+          </div>
+          <div className="flex justify-between text-[10px] font-mono text-slate-400 pt-0.5">
+            <span>Persons in View: {visionMetrics.detectedPersonsCount || 1}</span>
+            <span>Person Events: {visionMetrics.backgroundPersonEventsCount || 0}</span>
+          </div>
+        </div>
       </div>
 
       {/* Privacy Notice */}

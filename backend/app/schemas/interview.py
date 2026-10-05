@@ -91,6 +91,10 @@ class VisionSummaryRequest(BaseModel):
     frame_quality: float = Field(..., ge=0, le=100)
     lighting_quality: Optional[float] = 90.0
     dominant_posture_state: Optional[str] = "GOOD_ALIGNMENT"
+    background_person_events: Optional[int] = 0
+    background_movement_events: Optional[int] = 0
+    total_detected_duration_seconds: Optional[int] = 0
+    posture_warnings: Optional[int] = 0
     observations: List[str] = Field(default_factory=list)
 
 

@@ -18,12 +18,14 @@ import {
 interface VisualMetricsCardProps {
   metrics: VisionMetrics;
   telemetry?: VisionTelemetryRecord[];
+  environmentSummary?: import('../../types').EnvironmentMonitoringSummary;
   className?: string;
 }
 
 export const VisualMetricsCard: React.FC<VisualMetricsCardProps> = ({
   metrics,
   telemetry,
+  environmentSummary,
   className,
 }) => {
   // Generate presentation timeline data if telemetry was recorded, or create standard session timeline
@@ -49,6 +51,11 @@ export const VisualMetricsCard: React.FC<VisualMetricsCardProps> = ({
   const postureScore = metrics.postureConsistency || 91;
   const frameScore = metrics.frameQuality || 92;
   const lightingScore = metrics.lightingQualityScore || 90;
+
+  const bgPersonEvents = environmentSummary?.backgroundPersonEvents ?? metrics.backgroundPersonEventsCount ?? 0;
+  const bgMovementEvents = environmentSummary?.backgroundMovementEvents ?? metrics.backgroundMovementEventsCount ?? 0;
+  const bgPersonDuration = environmentSummary?.totalDetectedDurationSeconds ?? metrics.backgroundPersonDurationSeconds ?? 0;
+  const postureWarnings = environmentSummary?.postureWarnings ?? metrics.postureWarningsCount ?? 0;
 
   return (
     <Card className={cn('p-6 bg-[#0d1020]/90 border border-white/[0.08] backdrop-blur-xl', className)}>
@@ -129,6 +136,42 @@ export const VisualMetricsCard: React.FC<VisualMetricsCardProps> = ({
               {metrics.lightingState === 'GOOD_LIGHTING' ? 'Optimal Luminance' : 'Adequate'}
             </p>
           </div>
+        </div>
+
+        {/* Metric 4: Environment Monitoring Section */}
+        <div className="p-3.5 rounded-xl bg-slate-900/60 border border-white/[0.06] space-y-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Shield className="w-4 h-4 text-cyan-400" />
+              <span className="text-xs font-bold text-white font-display">Environment Monitoring</span>
+            </div>
+            <Badge variant={bgPersonEvents > 0 ? 'amber' : 'emerald'} size="sm">
+              {bgPersonEvents > 0 ? `${bgPersonEvents} Person Event(s)` : '✓ CLEAR ENVIRONMENT'}
+            </Badge>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-xs font-mono pt-1">
+            <div className="p-2 rounded-lg bg-black/40 border border-white/[0.04]">
+              <span className="text-[10px] text-slate-400 block">Background Person Events</span>
+              <span className="text-sm font-bold text-white">{bgPersonEvents}</span>
+            </div>
+            <div className="p-2 rounded-lg bg-black/40 border border-white/[0.04]">
+              <span className="text-[10px] text-slate-400 block">Background Movement Events</span>
+              <span className="text-sm font-bold text-white">{bgMovementEvents}</span>
+            </div>
+            <div className="p-2 rounded-lg bg-black/40 border border-white/[0.04]">
+              <span className="text-[10px] text-slate-400 block">Total Detected Duration</span>
+              <span className="text-sm font-bold text-white">{bgPersonDuration}s</span>
+            </div>
+            <div className="p-2 rounded-lg bg-black/40 border border-white/[0.04]">
+              <span className="text-[10px] text-slate-400 block">Posture Warnings</span>
+              <span className="text-sm font-bold text-white">{postureWarnings}</span>
+            </div>
+          </div>
+
+          <p className="text-[10px] text-slate-400 leading-snug">
+            Objective environmental signals logged via client-side computer vision. Zero raw video frames stored.
+          </p>
         </div>
 
         {/* Presentation Telemetry Timeline Chart */}

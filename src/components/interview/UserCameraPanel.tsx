@@ -60,8 +60,6 @@ export const UserCameraPanel: React.FC<UserCameraPanelProps> = ({
   } = useCamera(isCameraActive);
 
   const [isHudCollapsed, setIsHudCollapsed] = useState(false);
-  const [liveFeedback, setLiveFeedback] = useState<string | null>(null);
-  const lastFeedbackTimeRef = useRef(0);
 
   // Sync vision tracking whenever camera stream is active and video is mounted
   useEffect(() => {
@@ -74,37 +72,23 @@ export const UserCameraPanel: React.FC<UserCameraPanelProps> = ({
     }
   }, [isActive]);
 
-  // Handle feedback banners with a 15-second cooldown to avoid distracting the candidate
-  useEffect(() => {
-    const now = Date.now();
-    if (now - lastFeedbackTimeRef.current > 15000 && isActive) {
-      if (!visionMetrics.faceDetected) {
-        setLiveFeedback('Face not detected in camera frame.');
-        lastFeedbackTimeRef.current = now;
-      } else if (visionMetrics.cameraEngagement < 60) {
-        setLiveFeedback('Camera engagement is low. Look toward the camera.');
-        lastFeedbackTimeRef.current = now;
-      } else if (visionMetrics.frameQuality < 65) {
-        setLiveFeedback(visionMetrics.frameFeedback);
-        lastFeedbackTimeRef.current = now;
-      } else if (visionMetrics.postureState !== 'GOOD_ALIGNMENT') {
-        setLiveFeedback(visionMetrics.postureFeedback);
-        lastFeedbackTimeRef.current = now;
-      } else {
-        setLiveFeedback(null);
-      }
-    }
-  }, [visionMetrics, isActive]);
-
   const handleTestWebcam = async () => {
     console.log('[Camera] Testing webcam stream...');
     await retryCamera();
   };
 
+  const isBackgroundWarningActive = !!visionMetrics.backgroundPersonConfirmed;
+  const hasActiveWarning = !!visionMetrics.activeWarningMessage;
+
   return (
     <div
       className={cn(
-        'flex flex-col rounded-2xl bg-[#090c16] border border-white/[0.08] shadow-2xl overflow-hidden relative',
+        'flex flex-col rounded-2xl bg-[#090c16] border shadow-2xl overflow-hidden relative transition-all duration-300',
+        isBackgroundWarningActive
+          ? 'border-rose-500/80 shadow-[0_0_35px_rgba(244,63,94,0.35)] ring-2 ring-rose-500/50 animate-pulse-glow'
+          : hasActiveWarning
+          ? 'border-amber-500/70 shadow-[0_0_25px_rgba(245,158,11,0.25)]'
+          : 'border-white/[0.08]',
         className
       )}
     >
@@ -117,11 +101,21 @@ export const UserCameraPanel: React.FC<UserCameraPanelProps> = ({
           <span className="text-slate-300">{formatTime(elapsedSeconds)}</span>
         </div>
 
-        {/* Live Camera Engagement or Connection Badge */}
+        {/* Environment Monitoring Status Pill (Real-Time HUD Indicator) */}
         {isActive ? (
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/75 backdrop-blur-md border border-cyan-500/30 text-[11px] font-mono text-cyan-300">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span>● LIVE • Engagement: {visionMetrics.cameraEngagement}%</span>
+          <div
+            className={cn(
+              'flex items-center gap-1.5 px-2.5 py-1 rounded-full backdrop-blur-md border text-[11px] font-mono transition-all',
+              visionMetrics.environmentStatus === 'BACKGROUND_PERSON_DETECTED'
+                ? 'bg-rose-950/90 border-rose-500/60 text-rose-200 shadow-[0_0_15px_rgba(244,63,94,0.4)]'
+                : visionMetrics.environmentStatus === 'BACKGROUND_MOVEMENT_DETECTED'
+                ? 'bg-amber-950/90 border-amber-500/60 text-amber-200'
+                : visionMetrics.environmentStatus === 'POSTURE_WARNING'
+                ? 'bg-indigo-950/90 border-indigo-500/60 text-indigo-200'
+                : 'bg-black/75 border-cyan-500/30 text-cyan-300'
+            )}
+          >
+            <span>{visionMetrics.environmentStatusText || '🟢 Environment Clear'}</span>
           </div>
         ) : (
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/75 backdrop-blur-md border border-amber-500/30 text-[11px] font-mono text-amber-300">
@@ -259,11 +253,28 @@ export const UserCameraPanel: React.FC<UserCameraPanelProps> = ({
         )}
       </div>
 
-      {/* Gentle Real-Time Guidance Alert (with Cooldown) */}
-      {liveFeedback && isActive && (
-        <div className="px-3 py-1.5 bg-amber-950/40 border-t border-amber-500/20 text-[11px] text-amber-300 flex items-center gap-2">
-          <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-          <span className="truncate">{liveFeedback}</span>
+      {/* Prominent Real-Time Environment Warning Alert (Immediate Client-Side) */}
+      {isActive && visionMetrics.activeWarningMessage && (
+        <div
+          className={cn(
+            'p-3 border-t text-xs flex items-start gap-2.5 transition-all duration-200 animate-fadeIn',
+            isBackgroundWarningActive
+              ? 'bg-rose-950/95 border-rose-500/50 text-rose-100 shadow-[0_0_20px_rgba(244,63,94,0.3)]'
+              : 'bg-amber-950/90 border-amber-500/40 text-amber-100'
+          )}
+        >
+          <AlertTriangle
+            className={cn(
+              'w-4 h-4 shrink-0 mt-0.5',
+              isBackgroundWarningActive ? 'text-rose-400 animate-pulse' : 'text-amber-400'
+            )}
+          />
+          <div className="flex-1 font-medium leading-snug">
+            <span className="block font-bold text-[11px] uppercase tracking-wider mb-0.5">
+              {isBackgroundWarningActive ? '⚠️ Environment Warning' : '📐 Posture & Framing Notice'}
+            </span>
+            <span>{visionMetrics.activeWarningMessage}</span>
+          </div>
         </div>
       )}
 
