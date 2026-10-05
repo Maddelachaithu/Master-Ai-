@@ -1,8 +1,6 @@
-# Prevent Vercel from bundling heavy PyTorch / Whisper ML dependencies as a serverless function
-backend/
-server/
-docs/
-scripts/
-.pytest_cache/
-temp_audio/
-data/
+# Ignore root backend and non-frontend folders from Vercel static build
+/backend
+/server
+/docs
+/scripts
+/.pytest_cache
